@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Workout Gate</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #0f172a; color: #f8fafc;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      min-height: 100vh; margin: 0; padding: 20px; text-align: center;
+    }
+    .card {
+      background: #1e293b; padding: 24px 20px; border-radius: 24px;
+      max-width: 380px; width: 100%; box-shadow: 0 12px 30px rgba(0,0,0,0.5);
+    }
+    h1 { font-size: 1.5rem; margin: 0 0 6px; color: #38bdf8; }
+    p { color: #cbd5e1; font-size: 0.95rem; line-height: 1.4; margin: 0 0 16px; }
+    .video-wrap {
+      position: relative; width: 100%; height: 210px; background: #020617;
+      border-radius: 16px; overflow: hidden; margin-bottom: 16px;
+      border: 3px solid #334155; transition: border-color 0.2s;
+    }
+    .video-wrap.active { border-color: #22c55e; }
+    .video-wrap.paused { border-color: #f59e0b; }
+    video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+    .status-badge {
+      position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.85); padding: 4px 12px; border-radius: 999px;
+      font-size: 0.8rem; font-weight: 700; white-space: nowrap;
+    }
+    .timer {
+      font-size: 3.5rem; font-weight: 800; margin: 8px 0 16px;
+      font-variant-numeric: tabular-nums;
+    }
+    button {
+      background: #38bdf8; color: #0f172a; border: none; padding: 14px 20px;
+      font-size: 1rem; font-weight: 700; border-radius: 14px; width: 100%; cursor: pointer;
+    }
+    button:disabled { background: #334155; color: #94a3b8; }
+    .unlock-btn { background: #22c55e; color: #052e16; margin-top: 8px; }
+    .done-box { display: none; }
+    canvas { display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1 id="title">Loading Workout...</h1>
+    <p id="desc"></p>
+
+    <div class="video-wrap" id="videoWrap">
+      <video id="video" autoplay playsinline muted></video>
+      <div class="status-badge" id="statusBadge">Camera Off</div>
+    </div>
+
+    <div class="timer" id="timer">40</div>
+
+    <button id="startBtn" onclick="initCamera()">Enable Camera & Start</button>
+
+    <div class="done-box" id="doneBox">
+      <p style="color:#4ade80; font-weight:700; margin-bottom:10px;">Workout Complete!</p>
+      <button class="unlock-btn" onclick="triggerShortcut()">Unlock Apps for 15 Mins</button>
+    </div>
+  </div>
+
+  <canvas id="canvas" width="64" height="48"></canvas>
+
+  <script>
+    const workouts = [
+      { title: "Push-Ups", desc: "Prop your phone on the floor facing you and do steady push-ups until the timer hits zero.", time: 40, mode: "move" },
+      { title: "Sit-Ups", desc: "Keep your upper body in frame and perform controlled sit-ups or crunches.", time: 40, mode: "move" },
+      { title: "Bodyweight Squats", desc: "Step back so your torso is visible and squat continuously.", time: 45, mode: "move" },
+      { title: "Forearm Plank", desc: "Hold a steady plank in front of the camera without walking away.", time: 40, mode: "hold" },
+      { title: "Mountain Climbers", desc: "Get into a high plank in view of the camera and drive your knees rapidly.", time: 35, mode: "move" },
+      { title: "Alternating Lunges", desc: "Step back into view and alternate forward or reverse lunges.", time: 45, mode: "move" },
+      { title: "Jumping Jacks", desc: "Step back and keep moving at a steady pace until time runs out.", time: 40, mode: "move" },
+      { title: "Burpees", desc: "Drop down, kick back, and jump up in view of the camera.", time: 35, mode: "move" }
+    ];
+
+    const pick = workouts[Math.floor(Math.random() * workouts.length)];
+    document.getElementById("title").innerText = pick.title;
+    document.getElementById("desc").innerText = pick.desc;
+
+    let seconds = pick.time;
+    document.getElementById("timer").innerText = seconds;
+
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const wrap = document.getElementById("videoWrap");
+    const badge = document.getElementById("statusBadge");
+
+    let prevFrame = null;
+    let isMoving = false;
+    let motionHoldTimer = 0;
+
+    async function initCamera() {
+      const btn = document.getElementById("startBtn");
+      btn.disabled = true;
+      btn.innerText = "Starting Camera...";
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: 320, height: 240 },
+          audio: false
+        });
+        video.srcObject = stream;
+        btn.style.display = "none";
+        startMotionLoop();
+        startCountdown();
+      } catch (err) {
+        btn.disabled = false;
+        btn.innerText = "Camera Blocked — Tap to Retry";
+        badge.innerText = "Allow Camera in Safari Settings";
+      }
+    }
+
+    function startMotionLoop() {
+      setInterval(() => {
+        if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+        ctx.drawImage(video, 0, 0, 64, 48);
+        const frame = ctx.getImageData(0, 0, 64, 48).data;
+
+        if (prevFrame) {
+          let diff = 0;
+          for (let i = 0; i < frame.length; i += 4) {
+            diff += Math.abs(frame[i] - prevFrame[i]);
+          }
+          const avgDiff = diff / (64 * 48);
+
+          // Threshold tuned for full-body/upper-body movement on iPhone front camera
+          if (pick.mode === "move") {
+            if (avgDiff > 6.5) {
+              motionHoldTimer = 3; // Keep active for 0.6s after motion spike
+            } else if (motionHoldTimer > 0) {
+              motionHoldTimer--;
+            }
+            isMoving = motionHoldTimer > 0;
+          } else {
+            // Plank mode: counts down as long as you aren't violently walking off-screen
+            isMoving = avgDiff < 22;
+          }
+
+          if (isMoving) {
+            wrap.className = "video-wrap active";
+            badge.innerText = pick.mode === "move" ? "Motion Detected — Counting!" : "Holding Plank — Counting!";
+          } else {
+            wrap.className = "video-wrap paused";
+            badge.innerText = pick.mode === "move" ? "Keep Moving to Count Down" : "Stay Still in Frame";
+          }
+        }
+        prevFrame = new Uint8ClampedArray(frame);
+      }, 200);
+    }
+
+    function startCountdown() {
+      const timerInterval = setInterval(() => {
+        if (isMoving && seconds > 0) {
+          seconds--;
+          document.getElementById("timer").innerText = seconds;
+          if (seconds <= 0) {
+            clearInterval(timerInterval);
+            stopCamera();
+            wrap.style.display = "none";
+            document.getElementById("doneBox").style.display = "block";
+          }
+        }
+      }, 1000);
+    }
+
+    function stopCamera() {
+      const stream = video.srcObject;
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+    }
+
+    function triggerShortcut() {
+      window.location.href = "shortcuts://run-shortcut?name=GrantUnlock";
+    }
+  </script>
+</body>
+</html>
